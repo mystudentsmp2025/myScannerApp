@@ -54,7 +54,16 @@ class RosterDao {
       'local_roster',
       where: 'first_name LIKE ? OR last_name LIKE ? OR student_custom_id LIKE ?',
       whereArgs: ['%$query%', '%$query%', '%$query%'],
+      orderBy: 'first_name ASC, last_name ASC',
       limit: 50,
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> getAllStudents() async {
+    final db = await _dbHelper.database;
+    return await db.query(
+      'local_roster',
+      orderBy: 'first_name ASC, last_name ASC',
     );
   }
 

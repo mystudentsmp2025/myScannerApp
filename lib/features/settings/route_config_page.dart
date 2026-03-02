@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:myscannerapp/features/sync/sync_providers.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:myscannerapp/features/scanner/presentation/app_setup_page.dart';
 
 class RouteConfigPage extends ConsumerStatefulWidget {
   const RouteConfigPage({super.key});
@@ -34,7 +35,15 @@ class _RouteConfigPageState extends ConsumerState<RouteConfigPage> {
 
   Future<void> _fetchRoutes() async {
     try {
-      final routes = await ref.read(studentSyncServiceProvider).getRoutes();
+      final prefs = await SharedPreferences.getInstance();
+      final schoolId = prefs.getString('school_id');
+      final busId = prefs.getString('bus_id');
+
+      if (schoolId == null || busId == null) {
+        throw Exception('Device is not configured with a School or Bus ID.');
+      }
+
+      final routes = await ref.read(studentSyncServiceProvider).getRoutes(schoolId, busId);
       setState(() {
         _routes = routes;
         _isFetchingRoutes = false;
@@ -168,7 +177,55 @@ class _RouteConfigPageState extends ConsumerState<RouteConfigPage> {
             if (_selectedRouteId != null) ...[
                const SizedBox(height: 20),
                Text('Selected ID: $_selectedRouteId', style: const TextStyle(fontSize: 12, color: Colors.grey)),
-            ]
+            ],
+
+            const Spacer(),
+            const Divider(),
+            const SizedBox(height: 16),
+            const Text(
+              'Need to switch to a different bus?',
+              style: TextStyle(color: Colors.grey),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              height: 50,
+              child: OutlinedButton.icon(
+                onPressed: () async {
+                  // Confirm dialog
+                  final confirm = await showDialog<bool>(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: const Text('Re-configure Device?'),
+                      content: const Text('This will clear the current school and bus association. You will need to enter a School Code and Bus PIN again.\n\nAre you sure?'),
+                      actions: [
+                        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                        FilledButton(
+                          style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                          onPressed: () => Navigator.pop(ctx, true), 
+                          child: const Text('Proceed')
+                        ),
+                      ],
+                    )
+                  );
+
+                  if (confirm == true) {
+                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.clear(); // Clear all saved device data
+                    
+                    if (!mounted) return;
+
+                    Navigator.of(context).pushAndRemoveUntil(
+                      MaterialPageRoute(builder: (_) => const AppSetupPage()),
+                      (route) => false, // Remove all previous routes
+                    );
+                  }
+                },
+                icon: const Icon(Icons.phonelink_setup),
+                label: const Text('Re-configure Device'),
+              ),
+            ),
+            const SizedBox(height: 16),
           ],
         ),
       ),

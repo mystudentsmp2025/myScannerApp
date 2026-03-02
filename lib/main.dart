@@ -1,18 +1,25 @@
 import 'package:flutter/material.dart';
 import 'package:myscannerapp/core/supabase_service.dart';
-import 'package:myscannerapp/features/home/presentation/home_page.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:myscannerapp/features/scanner/presentation/scanner_dashboard_page.dart';
+import 'package:myscannerapp/features/scanner/presentation/app_setup_page.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await SupabaseService.initialize();
-  runApp(const ProviderScope(child: MyApp()));
+  
+  // Check if device is configured
+  final prefs = await SharedPreferences.getInstance();
+  final isConfigured = prefs.getString('school_id') != null && prefs.getString('bus_id') != null;
+
+  runApp(ProviderScope(child: MyApp(isConfigured: isConfigured)));
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  final bool isConfigured;
+  const MyApp({super.key, required this.isConfigured});
 
   @override
   Widget build(BuildContext context) {
@@ -23,7 +30,7 @@ class MyApp extends StatelessWidget {
         useMaterial3: true,
         textTheme: GoogleFonts.outfitTextTheme(),
       ),
-      home: ScannerDashboardPage(),
+      home: isConfigured ? const ScannerDashboardPage() : const AppSetupPage(),
     );
   }
 }

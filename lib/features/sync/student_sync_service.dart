@@ -12,14 +12,41 @@ class StudentSyncService {
 
   StudentSyncService(this._supabase, this._rosterDao) : _dio = Dio();
 
-  Future<List<Map<String, dynamic>>> getRoutes() async {
+  Future<List<Map<String, dynamic>>> getRoutes(String schoolId, String busId) async {
     try {
+      print('--- FETCHING ROUTES DEBUG ---');
+      print('Input schoolId: $schoolId');
+      print('Input busId: $busId');
+      
+      // Find the routes currently assigned to this specific bus via bus_assignments
       final response = await _supabase
           .schema('school_shared')
-          .from('bus_routes')
-          .select('id, route_name, route_number')
-          .order('route_name');
-      return List<Map<String, dynamic>>.from(response);
+          .from('bus_assignments')
+          .select('route_id, bus_routes(id, route_name, route_number)')
+          .eq('bus_id', busId);
+          
+      print('Raw Bus Assignments Response: $response');
+
+      // Extract unique routes from the assignments
+      final Set<String> seenRouteIds = {};
+      final List<Map<String, dynamic>> routes = [];
+
+      for (var row in response) {
+        final routeData = row['bus_routes'];
+        if (routeData != null) {
+          final id = routeData['id'].toString();
+          if (!seenRouteIds.contains(id)) {
+            seenRouteIds.add(id);
+            routes.add(Map<String, dynamic>.from(routeData));
+          }
+        } else {
+          print('Warning: Row has no bus_routes data: $row');
+        }
+      }
+
+      print('Filtered Routes: $routes');
+      routes.sort((a, b) => (a['route_name'] ?? '').compareTo(b['route_name'] ?? ''));
+      return routes;
     } catch (e) {
       print('CRITICAL ERROR fetching routes: $e');
       rethrow;
@@ -59,13 +86,14 @@ class StudentSyncService {
           final localPath = join(photosDir.path, fileName);
           
           try {
-            // Check if file exists or needs update (skip complex check for now, just download)
              await _dio.download(photoUrl, localPath);
              student['local_image_path'] = localPath;
           } catch (e) {
-            print('Failed to download photo for ${student['student_id']}: $e');
-            // Keep previous local path if available? Or set null.
-            // For now, if download fails, we might still have the record.
+            if (e is DioException && (e.response?.statusCode == 400 || e.response?.statusCode == 404)) {
+              // Expected if the student doesn't have a photo uploaded to the bucket yet
+            } else {
+              print('Failed to download photo for ${student['student_id']}: $e');
+            }
           }
         }
         

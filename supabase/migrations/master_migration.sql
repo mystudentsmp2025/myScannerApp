@@ -58,6 +58,26 @@ CREATE TABLE IF NOT EXISTS transport.boarding_logs (
     created_at     TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- 3c. transport.trip_events
+CREATE TABLE IF NOT EXISTS transport.trip_events (
+    id             UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    route_id       UUID NOT NULL,
+    bus_id         UUID NOT NULL,
+    school_id      UUID NOT NULL,
+    event_type     TEXT CHECK (event_type IN ('start', 'end')) NOT NULL,
+    latitude       NUMERIC(10, 8),
+    longitude      NUMERIC(11, 8),
+    timestamp      TIMESTAMPTZ DEFAULT NOW(),
+    created_at     TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Add myscannerapp_pin to existing school_shared.buses table if it doesn't exist
+DO $$ BEGIN
+    ALTER TABLE school_shared.buses ADD COLUMN myscannerapp_pin VARCHAR(4);
+EXCEPTION
+    WHEN duplicate_column THEN NULL;
+END $$;
+
 -- DROP old location column if it still exists from original migration
 ALTER TABLE transport.boarding_logs DROP COLUMN IF EXISTS location;
 
@@ -78,6 +98,10 @@ CREATE POLICY "Allow select own notifications"  ON public.notifications_queue FO
 -- boarding_logs: open (RLS disabled; application-level auth handles security)
 ALTER TABLE transport.boarding_logs DISABLE ROW LEVEL SECURITY;
 GRANT ALL ON transport.boarding_logs TO authenticated, service_role;
+
+-- trip_events: open (RLS disabled; application-level auth handles security like boarding_logs)
+ALTER TABLE transport.trip_events DISABLE ROW LEVEL SECURITY;
+GRANT ALL ON transport.trip_events TO authenticated, service_role, anon;
 
 -- boarding_events (school_shared schema - already exists)
 GRANT ALL ON school_shared.boarding_events TO authenticated;
@@ -171,7 +195,7 @@ LEFT JOIN school_shared.parent_student ps      ON s.id = ps.student_id AND ps.re
 LEFT JOIN mystudentapp.profiles p              ON ps.user_id = p.id
 WHERE ba.route_id IS NOT NULL;
 
-GRANT SELECT ON transport.roster_view TO authenticated;
+GRANT SELECT ON transport.roster_view TO authenticated, anon;
 
 
 -- ============================================================

@@ -37,15 +37,30 @@ class _ManualSearchWidgetState extends ConsumerState<ManualSearchWidget> {
   final TextEditingController _controller = TextEditingController();
   List<Map<String, dynamic>> _searchResults = [];
 
+  @override
+  void initState() {
+    super.initState();
+    // Pre-populate students on load
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadAllStudents();
+    });
+  }
+  
+  void _loadAllStudents() async {
+    final dao = ref.read(rosterDaoProvider);
+    final results = await dao.getAllStudents();
+    if (mounted) {
+      setState(() => _searchResults = results);
+    }
+  }
+
   void _search(String query) async {
     if (query.isEmpty) {
-      setState(() => _searchResults = []);
+      _loadAllStudents();
       return;
     }
     final dao = ref.read(rosterDaoProvider);
-    print('Searching for: $query');
     final results = await dao.searchStudents(query);
-    print('Found ${results.length} results');
     setState(() => _searchResults = results);
   }
 
@@ -123,7 +138,7 @@ class _ManualSearchWidgetState extends ConsumerState<ManualSearchWidget> {
                     child: ElevatedButton.icon(
                       onPressed: () {
                         Navigator.pop(context);
-                        widget.onScanned(student['student_custom_id'] ?? student['student_id'], forcedStatus: 'onboarded');
+                        widget.onScanned(student['student_id'].toString(), forcedStatus: 'onboarded');
                       },
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.green,
@@ -139,7 +154,7 @@ class _ManualSearchWidgetState extends ConsumerState<ManualSearchWidget> {
                     child: ElevatedButton.icon(
                       onPressed: () {
                          Navigator.pop(context);
-                         widget.onScanned(student['student_custom_id'] ?? student['student_id'], forcedStatus: 'offboarded');
+                         widget.onScanned(student['student_id'].toString(), forcedStatus: 'offboarded');
                       },
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.red,

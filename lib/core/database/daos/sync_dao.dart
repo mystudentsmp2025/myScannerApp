@@ -48,6 +48,7 @@ class SyncDao {
     return await db.rawQuery('''
       SELECT 
         l.id,
+        l.student_id,
         l.status as boarding_status,
         l.scanned_at,
         l.sync_status,
@@ -82,5 +83,32 @@ class SyncDao {
       where: 'scanned_at < ?',
       whereArgs: [date.toIso8601String()],
     );
+  }
+
+  Future<int> getStudentsOnBusCount() async {
+    final db = await _dbHelper.database;
+    // We need to find the latest status for each student today
+    // and count how many are 'onboarded'
+    
+    // Group by student_id, get the max scanned_at for each, then check if that status is 'onboarded'
+    final List<Map<String, dynamic>> result = await db.rawQuery('''
+      SELECT COUNT(*) as current_onboard_count
+      FROM (
+        SELECT student_id, status
+        FROM pending_sync
+        WHERE id IN (
+          SELECT id
+          FROM pending_sync
+          GROUP BY student_id
+          HAVING scanned_at = MAX(scanned_at)
+        )
+      ) current_status
+      WHERE current_status.status = 'onboarded'
+    ''');
+    
+    if (result.isNotEmpty) {
+      return Sqflite.firstIntValue(result) ?? 0;
+    }
+    return 0;
   }
 }

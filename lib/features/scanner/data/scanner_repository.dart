@@ -55,13 +55,13 @@ class ScannerRepository {
     // 2. Determine Logic (Onboard vs Offboard)
     final lastLog = await _syncDao.getLastLogForStudent(student['student_id']);
     
-    // Prevent double scan (debounce 5 seconds)
+    // Prevent double scan (debounce 60 seconds)
     if (lastLog != null) {
       final lastTime = DateTime.parse(lastLog['scanned_at']);
-      if (DateTime.now().difference(lastTime).inSeconds < 5) {
+      if (DateTime.now().difference(lastTime).inSeconds < 60) {
          return ScanResult(
           status: ScanStatus.duplicateScan,
-          message: 'Already scanned just now',
+          message: 'Already Scanned within the last minute!',
           boardingStatus: lastLog['status'],
           student: student,
         );

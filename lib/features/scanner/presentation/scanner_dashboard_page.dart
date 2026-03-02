@@ -13,6 +13,9 @@ import 'package:myscannerapp/features/scanner/presentation/strategies/mobile_sca
 import 'package:myscannerapp/features/settings/route_config_page.dart';
 import 'package:myscannerapp/core/network/network_service.dart';
 import 'package:myscannerapp/features/sync/sync_providers.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:myscannerapp/features/scanner/presentation/widgets/student_history_dialog.dart';
+import 'package:myscannerapp/core/supabase_service.dart';
 
 class ScannerDashboardPage extends ConsumerStatefulWidget {
   const ScannerDashboardPage({super.key});
@@ -25,18 +28,23 @@ class _ScannerDashboardPageState extends ConsumerState<ScannerDashboardPage> {
   // Config
   late ScannerInputStrategy _currentStrategy;
   final List<ScannerInputStrategy> _strategies = [
-    MobileScannerStrategy(),
-    RfidScannerStrategy(),
     ManualEntryStrategy(),
+    RfidScannerStrategy(),
+    MobileScannerStrategy(),
   ];
 
   // Logic
   bool _isProcessing = false;
-  
+
+  // Trip State Management
+  bool _isTripActive = false;
+  String? _activeRouteId;
+
   @override
   void initState() {
     super.initState();
-    _currentStrategy = _strategies.first; // Default to Camera
+    _currentStrategy = _strategies.first; // Default to Manual
+    _loadTripState();
     
     // Trigger sync on startup
     WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -61,8 +69,117 @@ class _ScannerDashboardPageState extends ConsumerState<ScannerDashboardPage> {
     });
   }
 
+  Future<void> _loadTripState() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _isTripActive = prefs.getBool('is_trip_active') ?? false;
+      _activeRouteId = prefs.getString('route_id'); // Uses assigned route
+    });
+  }
+
+  Future<void> _startTrip() async {
+    final prefs = await SharedPreferences.getInstance();
+    final routeId = prefs.getString('route_id');
+    final schoolId = prefs.getString('school_id');
+    final busId = prefs.getString('bus_id');
+
+    if (routeId == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Please select a Route in Settings before starting a trip.')),
+        );
+      }
+      return;
+    }
+
+    setState(() => _isTripActive = true);
+    await prefs.setBool('is_trip_active', true);
+
+    // Get location
+    final pos = await LocationService().getCurrentLocation();
+
+    try {
+      await SupabaseService.client.schema('transport').from('trip_events').insert({
+        'route_id': routeId,
+        'bus_id': busId,
+        'school_id': schoolId,
+        'event_type': 'start',
+        'latitude': pos?.latitude,
+        'longitude': pos?.longitude,
+      });
+    } catch (e) {
+      print('Failed to log trip start: $e');
+    }
+  }
+
+  Future<void> _endTrip() async {
+    final prefs = await SharedPreferences.getInstance();
+    final routeId = prefs.getString('route_id');
+    final schoolId = prefs.getString('school_id');
+    final busId = prefs.getString('bus_id');
+
+    // Confirm dialog
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('End Trip'),
+        content: const Text('Are you sure you want to end the current trip?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('End Trip')),
+        ],
+      )
+    );
+
+    if (confirm != true) return;
+
+    setState(() => _isTripActive = false);
+    await prefs.setBool('is_trip_active', false);
+
+    final pos = await LocationService().getCurrentLocation();
+
+    try {
+      await SupabaseService.client.schema('transport').from('trip_events').insert({
+        'route_id': routeId,
+        'bus_id': busId,
+        'school_id': schoolId,
+        'event_type': 'end',
+        'latitude': pos?.latitude,
+        'longitude': pos?.longitude,
+      });
+      if (mounted) {
+         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Trip Ended Successfully')));
+      }
+    } catch (e) {
+      print('Failed to log trip end: $e');
+    }
+  }
+
   void _handleScan(String code, {String? forcedStatus}) async {
     if (_isProcessing) return;
+    
+    // Auto-prompt to start trip if not active
+    if (!_isTripActive) {
+      final startNow = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('⚠️ No Active Trip', style: TextStyle(color: Colors.red)),
+          content: const Text('You must start a trip before scanning students.\n\nWould you like to start the trip now?'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Start Trip')),
+          ],
+        )
+      );
+
+      if (startNow == true) {
+        await _startTrip();
+        if (!_isTripActive) return; // If start failed due to no route
+      } else {
+        return; // Reject scan
+      }
+    }
+
     setState(() => _isProcessing = true);
 
     try {
@@ -86,6 +203,59 @@ class _ScannerDashboardPageState extends ConsumerState<ScannerDashboardPage> {
         // Refresh the list
         ref.invalidate(recentLogsProvider);
         ref.invalidate(pendingCountProvider);
+
+        // Check if bus is empty (all students dropped off)
+        final syncDao = ref.read(syncDaoProvider);
+        final countOnboard = await syncDao.getStudentsOnBusCount();
+        
+        // If they just offboarded and now count is 0
+        if (result.boardingStatus == 'offboarded' && countOnboard == 0 && _isTripActive) {
+          // Delay briefly so the scan result dialog can show first
+          Future.delayed(const Duration(seconds: 3), () async {
+            if (!mounted) return;
+            final endNow = await showDialog<bool>(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                title: const Text('Trip Complete?'),
+                content: const Text('The bus appears to be empty.\n\nWould you like to End the Trip now?'),
+                actions: [
+                  TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Not Yet')),
+                  FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('End Trip')),
+                ],
+              )
+            );
+
+            if (endNow == true) {
+              await _endTrip();
+            }
+          });
+        }
+        
+      } else if (result.status == ScanStatus.duplicateScan) {
+        // Show prominent warning for accidental double scan
+        showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Row(
+              children: [
+                Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 30),
+                SizedBox(width: 10),
+                Text('Already Scanned!', style: TextStyle(color: Colors.orange)),
+              ],
+            ),
+            content: Text(
+              '${result.student?['first_name']} ${result.student?['last_name']} was just scanned a moment ago.\n\nPlease wait 60 seconds before scanning them again.',
+              style: const TextStyle(fontSize: 16),
+            ),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx),
+                style: FilledButton.styleFrom(backgroundColor: Colors.orange),
+                child: const Text('Got it'),
+              ),
+            ],
+          )
+        );
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(result.message ?? 'Scan failed')),
@@ -115,6 +285,18 @@ class _ScannerDashboardPageState extends ConsumerState<ScannerDashboardPage> {
       appBar: AppBar(
         title: const Text('Bus Scanner'),
         actions: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8.0),
+            child: FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: _isTripActive ? Colors.red.shade100 : Colors.green.shade100,
+                foregroundColor: _isTripActive ? Colors.red.shade900 : Colors.green.shade900,
+              ),
+              icon: Icon(_isTripActive ? Icons.stop_circle : Icons.play_circle),
+              label: Text(_isTripActive ? 'End Trip' : 'Start Trip'),
+              onPressed: _isTripActive ? _endTrip : _startTrip,
+            ),
+          ),
           IconButton(
             icon: Icon(_currentStrategy.icon),
             onPressed: _toggleStrategy,
@@ -132,7 +314,6 @@ class _ScannerDashboardPageState extends ConsumerState<ScannerDashboardPage> {
       ),
       body: Column(
         children: [
-          // 1. Sync Status Bar
           // 1. Sync Status Bar
           Consumer(
             builder: (context, ref, _) {
@@ -236,6 +417,16 @@ class _ScannerDashboardPageState extends ConsumerState<ScannerDashboardPage> {
                               isBoarding ? Icons.login : Icons.logout,
                               color: isBoarding ? Colors.green : Colors.red,
                             ),
+                            onTap: () {
+                              showDialog(
+                                context: context,
+                                builder: (context) => StudentHistoryDialog(
+                                  studentId: log['student_id'] ?? log['student_custom_id'] ?? '',
+                                  firstName: log['first_name'] ?? 'Unknown',
+                                  lastName: log['last_name'] ?? '',
+                                ),
+                              );
+                            },
                           );
                         },
                       ),
