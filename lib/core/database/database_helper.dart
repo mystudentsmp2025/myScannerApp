@@ -21,7 +21,7 @@ class DatabaseHelper {
     
     return await openDatabase(
       path,
-      version: 2, // Incremented version
+      version: 3, // Incremented version to support stop sequences
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -51,10 +51,12 @@ class DatabaseHelper {
         pickup_stop_name TEXT,
         pickup_location TEXT,
         pickup_time TEXT,
+        pickup_stop_sequence INTEGER,
         drop_stop_id TEXT,
         drop_stop_name TEXT,
         drop_location TEXT,
         drop_time TEXT,
+        drop_stop_sequence INTEGER,
         
         parent_user_id TEXT,
         parent_mobile TEXT,
@@ -98,6 +100,17 @@ class DatabaseHelper {
       
       try {
         await db.execute('ALTER TABLE pending_sync ADD COLUMN longitude REAL');
+      } catch (_) {}
+    }
+
+    if (oldVersion < 3) {
+      // Add stop sequence columns to local_roster
+      try {
+        await db.execute('ALTER TABLE local_roster ADD COLUMN pickup_stop_sequence INTEGER');
+      } catch (_) {}
+      
+      try {
+        await db.execute('ALTER TABLE local_roster ADD COLUMN drop_stop_sequence INTEGER');
       } catch (_) {}
     }
   }

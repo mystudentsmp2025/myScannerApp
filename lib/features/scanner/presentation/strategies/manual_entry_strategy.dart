@@ -49,9 +49,7 @@ class _ManualSearchWidgetState extends ConsumerState<ManualSearchWidget> {
   void _loadAllStudents() async {
     final dao = ref.read(rosterDaoProvider);
     final results = await dao.getAllStudents();
-    if (mounted) {
-      setState(() => _searchResults = results);
-    }
+    _sortAndDisplay(results);
   }
 
   void _search(String query) async {
@@ -61,11 +59,40 @@ class _ManualSearchWidgetState extends ConsumerState<ManualSearchWidget> {
     }
     final dao = ref.read(rosterDaoProvider);
     final results = await dao.searchStudents(query);
-    setState(() => _searchResults = results);
+    _sortAndDisplay(results);
+  }
+
+  void _sortAndDisplay(List<Map<String, dynamic>> results) {
+    // Sort by stop sequence (numerical order of the route)
+    final sorted = List<Map<String, dynamic>>.from(results);
+    sorted.sort((a, b) {
+      final seqA = a['pickup_stop_sequence'] as int? ?? 999;
+      final seqB = b['pickup_stop_sequence'] as int? ?? 999;
+      
+      if (seqA != seqB) {
+        return seqA.compareTo(seqB);
+      }
+      
+      // Secondary sort by name
+      final nameA = '${a['first_name']} ${a['last_name']}';
+      final nameB = '${b['first_name']} ${b['last_name']}';
+      return nameA.compareTo(nameB);
+    });
+
+    if (mounted) {
+      setState(() => _searchResults = sorted);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    // Listen for roster updates (e.g. from RouteConfigPage download)
+    ref.listen<int>(rosterUpdateProvider, (previous, next) {
+      if (next > 0) {
+        _loadAllStudents();
+      }
+    });
+
     return Column(
       children: [
         Padding(
@@ -103,9 +130,19 @@ class _ManualSearchWidgetState extends ConsumerState<ManualSearchWidget> {
                     : null,
                 ),
                 title: Text('${student['first_name']} ${student['last_name']}'),
-                subtitle: Text('ID: ${student['student_custom_id']} | Grade: ${student['grade']}'),
-                onTap: () {
-                  _showActionSheet(context, student);
+                subtitle: Text(
+                  student['student_custom_id'] != null 
+                    ? 'ID: ${student['student_custom_id']} | Grade: ${student['grade']} | Stop: ${student['pickup_stop_name'] ?? 'N/A'}'
+                    : 'Role: ${student['grade']} | Stop: ${student['pickup_stop_name'] ?? 'N/A'}'
+                ),
+                onTap: () async {
+                  final syncDao = ref.read(syncDaoProvider);
+                  final lastLog = await syncDao.getLastLogForStudent(student['student_id'].toString());
+                  final isCurrentlyOnboarded = lastLog != null && lastLog['status'] == 'onboarded';
+                  
+                  if (mounted) {
+                    _showActionSheet(context, student, isCurrentlyOnboarded);
+                  }
                 },
               );
             },
@@ -115,7 +152,7 @@ class _ManualSearchWidgetState extends ConsumerState<ManualSearchWidget> {
     );
   }
 
-  void _showActionSheet(BuildContext context, Map<String, dynamic> student) {
+  void _showActionSheet(BuildContext context, Map<String, dynamic> student, bool isCurrentlyOnboarded) {
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
@@ -130,41 +167,45 @@ class _ManualSearchWidgetState extends ConsumerState<ManualSearchWidget> {
                 style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 8),
-              Text('ID: ${student['student_custom_id']}'),
+              if (student['student_custom_id'] != null)
+                Text('ID: ${student['student_custom_id']}')
+              else
+                Text('Role: ${student['grade']}'),
               const SizedBox(height: 24),
               Row(
                 children: [
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: () {
-                        Navigator.pop(context);
-                        widget.onScanned(student['student_id'].toString(), forcedStatus: 'onboarded');
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.green,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
+                  if (!isCurrentlyOnboarded)
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: () {
+                          Navigator.pop(context);
+                          widget.onScanned(student['student_id'].toString(), forcedStatus: 'onboarded');
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.green,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                        ),
+                        icon: const Icon(Icons.login),
+                        label: const Text('BOARD'),
                       ),
-                      icon: const Icon(Icons.login),
-                      label: const Text('BOARD'),
                     ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: () {
-                         Navigator.pop(context);
-                         widget.onScanned(student['student_id'].toString(), forcedStatus: 'offboarded');
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.red,
-                        foregroundColor: Colors.white,
-                         padding: const EdgeInsets.symmetric(vertical: 16),
+                  if (isCurrentlyOnboarded)
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: () {
+                           Navigator.pop(context);
+                           widget.onScanned(student['student_id'].toString(), forcedStatus: 'offboarded');
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.red,
+                          foregroundColor: Colors.white,
+                           padding: const EdgeInsets.symmetric(vertical: 16),
+                        ),
+                        icon: const Icon(Icons.logout),
+                        label: const Text('DEBOARD'),
                       ),
-                      icon: const Icon(Icons.logout),
-                      label: const Text('DEBOARD'),
                     ),
-                  ),
                 ],
               ),
               const SizedBox(height: 16),

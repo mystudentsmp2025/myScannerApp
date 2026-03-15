@@ -25,3 +25,13 @@ final logSyncServiceProvider = Provider<LogSyncService>((ref) {
     ref.watch(syncDaoProvider),
   );
 });
+
+// Used to trigger UI refreshes when the local roster is updated
+class RosterUpdateNotifier extends Notifier<int> {
+  @override
+  int build() => 0;
+  
+  void increment() => state++;
+}
+
+final rosterUpdateProvider = NotifierProvider<RosterUpdateNotifier, int>(RosterUpdateNotifier.new);

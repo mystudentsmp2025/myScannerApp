@@ -109,6 +109,23 @@ ALTER TABLE school_shared.boarding_events ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Drivers can insert events" ON school_shared.boarding_events;
 CREATE POLICY "Drivers can insert events" ON school_shared.boarding_events FOR INSERT TO authenticated WITH CHECK (true);
 
+-- Ensure transport module can read shared school tables
+GRANT USAGE ON SCHEMA school_shared TO authenticated, anon;
+GRANT SELECT ON school_shared.buses TO authenticated, anon;
+GRANT SELECT ON school_shared.bus_routes TO authenticated, anon;
+GRANT SELECT ON school_shared.route_bus_assignments TO authenticated, anon;
+GRANT SELECT ON school_shared.student_route_assignments TO authenticated, anon;
+GRANT SELECT ON school_shared.employee_route_assignments TO authenticated, anon;
+GRANT SELECT ON school_shared.employees TO authenticated, anon;
+GRANT SELECT ON school_shared.schools TO authenticated, anon;
+
+-- Disable RLS if present on new mapping tables to simplify for now, 
+-- or ensure policies are broad enough for the scanner app's service-like behavior.
+ALTER TABLE school_shared.route_bus_assignments DISABLE ROW LEVEL SECURITY;
+ALTER TABLE school_shared.student_route_assignments DISABLE ROW LEVEL SECURITY;
+ALTER TABLE school_shared.employee_route_assignments DISABLE ROW LEVEL SECURITY;
+ALTER TABLE school_shared.bus_routes DISABLE ROW LEVEL SECURITY;
+
 
 -- ============================================================
 -- SECTION 5: VIEWS
@@ -118,8 +135,10 @@ CREATE POLICY "Drivers can insert events" ON school_shared.boarding_events FOR I
 DROP VIEW IF EXISTS transport.roster_view;
 
 CREATE OR REPLACE VIEW transport.roster_view AS
+-- Students
 SELECT
-    s.id                AS student_id,
+    s.id::text          AS student_id,
+    'student'           AS passenger_type,
     s.student_custom_id,
     s.first_name,
     s.last_name,
@@ -132,68 +151,155 @@ SELECT
     'https://jqpahjeymfukkzwiapog.supabase.co/storage/v1/object/public/profile_pictures/' || s.id AS photo_url,
 
     -- Transport
-    ba.route_id         AS route_id,
+    sra.route_id        AS route_id,
     br.route_name       AS route_name,
-    ba.bus_id           AS bus_id,
+    rba.bus_id          AS bus_id,
     b.bus_number        AS bus_number,
 
-    -- Driver
+    -- Driver (from buses.driver_id → employees)
     (e.first_name || ' ' || e.last_name) AS driver_name,
     dp.mobile_number    AS driver_mobile,
 
-    -- Pickup Stop
-    ba.pickup_stop      AS pickup_stop_id,
-    COALESCE(pickup_stop.name, ba.pickup_stop) AS pickup_stop_name,
+    -- Pickup Stop (resolved from bus_routes.stops JSONB)
+    sra.pickup_stop     AS pickup_stop_id,
+    COALESCE(pickup_stop.name, sra.pickup_stop) AS pickup_stop_name,
     CASE
         WHEN pickup_stop.lat IS NOT NULL AND pickup_stop.lng IS NOT NULL
         THEN ('POINT(' || pickup_stop.lng || ' ' || pickup_stop.lat || ')')::GEOGRAPHY
         ELSE NULL
     END AS pickup_location,
     pickup_stop.scheduled_time AS pickup_time,
+    pickup_stop.stop_sequence AS pickup_stop_sequence,
 
-    -- Drop Stop
-    ba.dropoff_stop     AS drop_stop_id,
-    COALESCE(drop_stop.name, ba.dropoff_stop) AS drop_stop_name,
+    -- Drop Stop (resolved from bus_routes.stops JSONB)
+    sra.dropoff_stop    AS drop_stop_id,
+    COALESCE(drop_stop.name, sra.dropoff_stop) AS drop_stop_name,
     CASE
         WHEN drop_stop.lat IS NOT NULL AND drop_stop.lng IS NOT NULL
         THEN ('POINT(' || drop_stop.lng || ' ' || drop_stop.lat || ')')::GEOGRAPHY
         ELSE NULL
     END AS drop_location,
     drop_stop.scheduled_time AS drop_time,
+    drop_stop.stop_sequence AS drop_stop_sequence,
 
     -- Parent Info
     p.id                AS parent_user_id,
     p.mobile_number     AS parent_mobile
 
 FROM school_shared.students s
-LEFT JOIN school_shared.class_sections cs      ON s.section_id = cs.id
-LEFT JOIN school_shared.classes c              ON cs.class_id = c.id
-LEFT JOIN school_shared.bus_assignments ba     ON s.id = ba.student_id
-LEFT JOIN school_shared.bus_routes br          ON ba.route_id = br.id
-LEFT JOIN school_shared.buses b                ON ba.bus_id = b.id
-LEFT JOIN school_shared.employees e            ON b.driver_id = e.id AND e.role = 'driver'
-LEFT JOIN mystudentapp.profiles dp             ON e.email = dp.email
+LEFT JOIN school_shared.class_sections cs              ON s.section_id = cs.id
+LEFT JOIN school_shared.classes c                      ON cs.class_id = c.id
+LEFT JOIN school_shared.student_route_assignments sra  ON s.id = sra.student_id
+LEFT JOIN school_shared.route_bus_assignments rba      ON sra.route_id = rba.route_id
+LEFT JOIN school_shared.bus_routes br                  ON sra.route_id = br.id
+LEFT JOIN school_shared.buses b                        ON rba.bus_id = b.id
+LEFT JOIN school_shared.employees e                    ON b.driver_id = e.id AND e.role = 'driver'
+LEFT JOIN mystudentapp.profiles dp                     ON e.email = dp.email
 LEFT JOIN LATERAL (
     SELECT
-        el ->> 'name'            AS name,
+        el ->> 'name'                 AS name,
         (el ->> 'latitude')::numeric  AS lat,
         (el ->> 'longitude')::numeric AS lng,
-        el ->> 'scheduled_time'  AS scheduled_time
-    FROM jsonb_array_elements(br.stops::jsonb) el
-    WHERE (el ->> 'name') = ba.pickup_stop
+        el ->> 'scheduled_time'       AS scheduled_time,
+        ord                           AS stop_sequence
+    FROM jsonb_array_elements(br.stops::jsonb) WITH ORDINALITY AS t(el, ord)
+    WHERE (el ->> 'name') = sra.pickup_stop
 ) pickup_stop ON true
 LEFT JOIN LATERAL (
     SELECT
-        el ->> 'name'            AS name,
+        el ->> 'name'                 AS name,
         (el ->> 'latitude')::numeric  AS lat,
         (el ->> 'longitude')::numeric AS lng,
-        el ->> 'scheduled_time'  AS scheduled_time
-    FROM jsonb_array_elements(br.stops::jsonb) el
-    WHERE (el ->> 'name') = ba.dropoff_stop
+        el ->> 'scheduled_time'       AS scheduled_time,
+        ord                           AS stop_sequence
+    FROM jsonb_array_elements(br.stops::jsonb) WITH ORDINALITY AS t(el, ord)
+    WHERE (el ->> 'name') = sra.dropoff_stop
 ) drop_stop ON true
-LEFT JOIN school_shared.parent_student ps      ON s.id = ps.student_id AND ps.relation = 'Father'
+LEFT JOIN school_shared.student_contacts ps     ON s.id = ps.student_id AND ps.relationship = 'Father'
 LEFT JOIN mystudentapp.profiles p              ON ps.user_id = p.id
-WHERE ba.route_id IS NOT NULL;
+WHERE sra.route_id IS NOT NULL
+
+UNION ALL
+
+-- Teachers / Staff
+SELECT
+    e_staff.id::text    AS student_id, -- Maps to student_id for app compatibility
+    'staff'             AS passenger_type,
+    NULL                AS student_custom_id,
+    e_staff.first_name,
+    e_staff.last_name,
+
+    -- Role (instead of Grade)
+    e_staff.role        AS grade,
+    NULL                AS section,
+
+    -- Photo (Assume same bucket structure or handle accordingly)
+    'https://jqpahjeymfukkzwiapog.supabase.co/storage/v1/object/public/profile_pictures/' || e_staff.id AS photo_url,
+
+    -- Transport
+    era.route_id        AS route_id,
+    br.route_name       AS route_name,
+    rba.bus_id          AS bus_id,
+    b.bus_number        AS bus_number,
+
+    -- Driver
+    (e_driver.first_name || ' ' || e_driver.last_name) AS driver_name,
+    dp.mobile_number    AS driver_mobile,
+
+    -- Pickup Stop 
+    era.pickup_stop     AS pickup_stop_id,
+    COALESCE(pickup_stop.name, era.pickup_stop) AS pickup_stop_name,
+    CASE
+        WHEN pickup_stop.lat IS NOT NULL AND pickup_stop.lng IS NOT NULL
+        THEN ('POINT(' || pickup_stop.lng || ' ' || pickup_stop.lat || ')')::GEOGRAPHY
+        ELSE NULL
+    END AS pickup_location,
+    pickup_stop.scheduled_time AS pickup_time,
+    pickup_stop.stop_sequence AS pickup_stop_sequence,
+
+    -- Drop Stop
+    era.dropoff_stop    AS drop_stop_id,
+    COALESCE(drop_stop.name, era.dropoff_stop) AS drop_stop_name,
+    CASE
+        WHEN drop_stop.lat IS NOT NULL AND drop_stop.lng IS NOT NULL
+        THEN ('POINT(' || drop_stop.lng || ' ' || drop_stop.lat || ')')::GEOGRAPHY
+        ELSE NULL
+    END AS drop_location,
+    drop_stop.scheduled_time AS drop_time,
+    drop_stop.stop_sequence AS drop_stop_sequence,
+
+    -- No Parent Info for Staff
+    NULL                AS parent_user_id,
+    NULL                AS parent_mobile
+
+FROM school_shared.employees e_staff
+JOIN school_shared.employee_route_assignments era      ON e_staff.id = era.employee_id
+JOIN school_shared.route_bus_assignments rba           ON era.route_id = rba.route_id
+JOIN school_shared.bus_routes br                       ON era.route_id = br.id
+JOIN school_shared.buses b                             ON rba.bus_id = b.id
+LEFT JOIN school_shared.employees e_driver             ON b.driver_id = e_driver.id AND e_driver.role = 'driver'
+LEFT JOIN mystudentapp.profiles dp                     ON e_driver.email = dp.email
+LEFT JOIN LATERAL (
+    SELECT
+        el ->> 'name'                 AS name,
+        (el ->> 'latitude')::numeric  AS lat,
+        (el ->> 'longitude')::numeric AS lng,
+        el ->> 'scheduled_time'       AS scheduled_time,
+        ord                           AS stop_sequence
+    FROM jsonb_array_elements(br.stops::jsonb) WITH ORDINALITY AS t(el, ord)
+    WHERE (el ->> 'name') = era.pickup_stop
+) pickup_stop ON true
+LEFT JOIN LATERAL (
+    SELECT
+        el ->> 'name'                 AS name,
+        (el ->> 'latitude')::numeric  AS lat,
+        (el ->> 'longitude')::numeric AS lng,
+        el ->> 'scheduled_time'       AS scheduled_time,
+        ord                           AS stop_sequence
+    FROM jsonb_array_elements(br.stops::jsonb) WITH ORDINALITY AS t(el, ord)
+    WHERE (el ->> 'name') = era.dropoff_stop
+) drop_stop ON true
+WHERE era.route_id IS NOT NULL;
 
 GRANT SELECT ON transport.roster_view TO authenticated, anon;
 
@@ -248,7 +354,7 @@ DECLARE
 BEGIN
     SELECT route_id INTO v_route_id
     FROM transport.roster_view
-    WHERE student_id = NEW.student_id::uuid
+    WHERE student_id::text = NEW.student_id::text
     LIMIT 1;
 
     IF NEW.latitude IS NOT NULL AND NEW.longitude IS NOT NULL AND v_route_id IS NOT NULL THEN
@@ -266,24 +372,27 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 CREATE OR REPLACE FUNCTION transport.trigger_notification_on_boarding()
 RETURNS TRIGGER AS $$
 DECLARE
-    v_student_name TEXT;
-    v_parent_id    UUID;
-    v_bus_id       UUID;
-    v_event_type   TEXT;
-    v_title        TEXT;
-    v_body         TEXT;
+    v_passenger_type TEXT;
+    v_student_name   TEXT;
+    v_parent_id      UUID;
+    v_bus_id         UUID;
+    v_event_type     TEXT;
+    v_title          TEXT;
+    v_body           TEXT;
 BEGIN
-    -- Fetch student info from roster view
+    -- Fetch passenger info from roster view
     SELECT
+        passenger_type,
         first_name || ' ' || last_name,
         parent_user_id,
         bus_id
     INTO
+        v_passenger_type,
         v_student_name,
         v_parent_id,
         v_bus_id
     FROM transport.roster_view
-    WHERE student_id = NEW.student_id::uuid
+    WHERE student_id::text = NEW.student_id::text
     LIMIT 1;
 
     -- Fallback: use embedded parent_user_id from the log row
@@ -298,8 +407,8 @@ BEGIN
         v_event_type := 'deboard';
     END IF;
 
-    -- Write to school_shared.boarding_events (for parent app)
-    IF v_bus_id IS NOT NULL THEN
+    -- Write to school_shared.boarding_events (ONLY for students to avoid FK errors)
+    IF v_bus_id IS NOT NULL AND v_passenger_type = 'student' THEN
         INSERT INTO school_shared.boarding_events (
             student_id, bus_id, event_type, location_lat, location_lng, timestamp
         ) VALUES (
@@ -312,8 +421,8 @@ BEGIN
         );
     END IF;
 
-    -- Skip notification if no parent found
-    IF v_parent_id IS NULL THEN
+    -- Skip notification if no parent found or if it's staff
+    IF v_parent_id IS NULL OR v_passenger_type = 'staff' THEN
         RETURN NEW;
     END IF;
 

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:myscannerapp/core/supabase_service.dart';
 import 'package:myscannerapp/features/scanner/presentation/scanner_dashboard_page.dart';
+import 'package:myscannerapp/features/settings/route_config_page.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class AppSetupPage extends ConsumerStatefulWidget {
@@ -92,9 +93,9 @@ class _AppSetupPageState extends ConsumerState<AppSetupPage> {
 
       if (!mounted) return;
 
-      // Navigate to Scanner Dashboard
+      // Navigate to Route Configuration (instead of Dashboard) to download roster
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (context) => const ScannerDashboardPage()),
+        MaterialPageRoute(builder: (context) => const RouteConfigPage()),
       );
     } catch (e) {
       setState(() {

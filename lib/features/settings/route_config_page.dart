@@ -98,6 +98,9 @@ class _RouteConfigPageState extends ConsumerState<RouteConfigPage> {
       await syncService.syncRoster(_selectedRouteId!);
 
       if (mounted) {
+        // Trigger UI refresh across the app
+        ref.read(rosterUpdateProvider.notifier).increment();
+        
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Roster downloaded successfully!')),
         );

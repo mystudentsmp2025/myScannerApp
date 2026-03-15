@@ -123,7 +123,7 @@ class _ScannerDashboardPageState extends ConsumerState<ScannerDashboardPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('End Trip'),
-        content: const Text('Are you sure you want to end the current trip?'),
+        content: const Text('Are you sure you want to end the current trip?\n\nThis will automatically offboard any remaining passengers on the bus.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('End Trip')),
@@ -139,6 +139,7 @@ class _ScannerDashboardPageState extends ConsumerState<ScannerDashboardPage> {
     final pos = await LocationService().getCurrentLocation();
 
     try {
+      // 1. Log trip end to Supabase
       await SupabaseService.client.schema('transport').from('trip_events').insert({
         'route_id': routeId,
         'bus_id': busId,
@@ -147,8 +148,30 @@ class _ScannerDashboardPageState extends ConsumerState<ScannerDashboardPage> {
         'latitude': pos?.latitude,
         'longitude': pos?.longitude,
       });
+
+      // 2. Auto-Deboard remaining passengers
+      final syncDao = ref.read(syncDaoProvider);
+      final repo = ref.read(scannerRepositoryProvider);
+      final onboardedIds = await syncDao.getOnboardedPassengerIds();
+
+      if (onboardedIds.isNotEmpty) {
+        for (final id in onboardedIds) {
+          await repo.processScan(
+            code: id,
+            latitude: pos?.latitude,
+            longitude: pos?.longitude,
+            forcedStatus: 'offboarded',
+          );
+        }
+        // Refresh UI
+        ref.invalidate(recentLogsProvider);
+        ref.invalidate(pendingCountProvider);
+      }
+
       if (mounted) {
-         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Trip Ended Successfully')));
+         ScaffoldMessenger.of(context).showSnackBar(
+           SnackBar(content: Text('Trip Ended. ${onboardedIds.length} passengers auto-deboarded.'))
+         );
       }
     } catch (e) {
       print('Failed to log trip end: $e');

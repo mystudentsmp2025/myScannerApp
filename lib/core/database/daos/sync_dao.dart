@@ -111,4 +111,24 @@ class SyncDao {
     }
     return 0;
   }
+
+  Future<List<String>> getOnboardedPassengerIds() async {
+    final db = await _dbHelper.database;
+    final List<Map<String, dynamic>> result = await db.rawQuery('''
+      SELECT student_id
+      FROM (
+        SELECT student_id, status
+        FROM pending_sync
+        WHERE id IN (
+          SELECT id
+          FROM pending_sync
+          GROUP BY student_id
+          HAVING scanned_at = MAX(scanned_at)
+        )
+      ) current_status
+      WHERE current_status.status = 'onboarded'
+    ''');
+    
+    return result.map((row) => row['student_id'] as String).toList();
+  }
 }

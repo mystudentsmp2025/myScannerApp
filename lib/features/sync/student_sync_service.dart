@@ -18,26 +18,28 @@ class StudentSyncService {
       print('Input schoolId: $schoolId');
       print('Input busId: $busId');
       
-      // Find the routes currently assigned to this specific bus via bus_assignments
+      // Find the routes currently assigned to this specific bus via route_bus_assignments
+      // Using a more explicit join pattern to ensure PostgREST resolves the FK correctly
       final response = await _supabase
           .schema('school_shared')
-          .from('bus_assignments')
-          .select('route_id, bus_routes(id, route_name, route_number)')
+          .from('route_bus_assignments')
+          .select('route_id, bus_routes:route_id(id, route_name, route_number)')
           .eq('bus_id', busId);
           
-      print('Raw Bus Assignments Response: $response');
+      print('--- ROUTE FETCH RESPONSE ---');
+      print('Response length: ${response.length}');
+      print('Raw Response: $response');
 
-      // Extract unique routes from the assignments
-      final Set<String> seenRouteIds = {};
       final List<Map<String, dynamic>> routes = [];
 
       for (var row in response) {
         final routeData = row['bus_routes'];
         if (routeData != null) {
-          final id = routeData['id'].toString();
-          if (!seenRouteIds.contains(id)) {
-            seenRouteIds.add(id);
-            routes.add(Map<String, dynamic>.from(routeData));
+          // If bus_routes is a list (PostgREST sometimes returns a list for certain joins)
+          if (routeData is List && routeData.isNotEmpty) {
+             routes.add(Map<String, dynamic>.from(routeData.first));
+          } else if (routeData is Map) {
+             routes.add(Map<String, dynamic>.from(routeData));
           }
         } else {
           print('Warning: Row has no bus_routes data: $row');
