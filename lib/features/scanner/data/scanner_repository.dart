@@ -35,6 +35,7 @@ class ScannerRepository {
     required double? latitude, 
     required double? longitude,
     String? forcedStatus,
+    bool ignoreDebounce = false,
   }) async {
     // 1. Look up student in local roster
     // Try by student_id or custom_id
@@ -56,7 +57,8 @@ class ScannerRepository {
     final lastLog = await _syncDao.getLastLogForStudent(student['student_id']);
     
     // Prevent double scan (debounce 60 seconds)
-    if (lastLog != null) {
+    // We bypass this debounce if ignoreDebounce is true (e.g. End Trip Auto Deboard)
+    if (!ignoreDebounce && lastLog != null) {
       final lastTime = DateTime.parse(lastLog['scanned_at']);
       if (DateTime.now().difference(lastTime).inSeconds < 60) {
          return ScanResult(

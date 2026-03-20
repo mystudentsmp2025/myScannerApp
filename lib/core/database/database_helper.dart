@@ -21,7 +21,7 @@ class DatabaseHelper {
     
     return await openDatabase(
       path,
-      version: 3, // Incremented version to support stop sequences
+      version: 4, // Incremented version to support passenger_type
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -32,6 +32,7 @@ class DatabaseHelper {
     await db.execute('''
       CREATE TABLE local_roster (
         student_id TEXT PRIMARY KEY,
+        passenger_type TEXT,
         student_custom_id TEXT,
         first_name TEXT NOT NULL,
         last_name TEXT NOT NULL,
@@ -111,6 +112,13 @@ class DatabaseHelper {
       
       try {
         await db.execute('ALTER TABLE local_roster ADD COLUMN drop_stop_sequence INTEGER');
+      } catch (_) {}
+    }
+
+    if (oldVersion < 4) {
+      // Add passenger_type column to local_roster
+      try {
+        await db.execute('ALTER TABLE local_roster ADD COLUMN passenger_type TEXT');
       } catch (_) {}
     }
   }

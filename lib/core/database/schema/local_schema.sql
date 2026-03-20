@@ -1,6 +1,7 @@
 -- Local Roster Table (Updated to match transport.roster_view)
 CREATE TABLE local_roster (
     student_id TEXT PRIMARY KEY, -- UUID from Supabase
+    passenger_type TEXT,
     student_custom_id TEXT,
     first_name TEXT NOT NULL,
     last_name TEXT NOT NULL,

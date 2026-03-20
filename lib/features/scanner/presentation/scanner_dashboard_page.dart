@@ -61,6 +61,11 @@ class _ScannerDashboardPageState extends ConsumerState<ScannerDashboardPage> {
       ref.read(logSyncServiceProvider).syncPendingLogs();
     });
   }
+  @override
+  void dispose() {
+    LocationService().stopTracking();
+    super.dispose();
+  }
 
   void _toggleStrategy() {
     setState(() {
@@ -71,10 +76,15 @@ class _ScannerDashboardPageState extends ConsumerState<ScannerDashboardPage> {
 
   Future<void> _loadTripState() async {
     final prefs = await SharedPreferences.getInstance();
+    final isActive = prefs.getBool('is_trip_active') ?? false;
     setState(() {
-      _isTripActive = prefs.getBool('is_trip_active') ?? false;
+      _isTripActive = isActive;
       _activeRouteId = prefs.getString('route_id'); // Uses assigned route
     });
+
+    if (isActive) {
+      LocationService().startTracking();
+    }
   }
 
   Future<void> _startTrip() async {
@@ -95,8 +105,10 @@ class _ScannerDashboardPageState extends ConsumerState<ScannerDashboardPage> {
     setState(() => _isTripActive = true);
     await prefs.setBool('is_trip_active', true);
 
-    // Get location
-    final pos = await LocationService().getCurrentLocation();
+    // Get initial location and start continuous tracking
+    final locationService = LocationService();
+    final pos = await locationService.getCurrentLocation();
+    locationService.startTracking();
 
     try {
       await SupabaseService.client.schema('transport').from('trip_events').insert({
@@ -136,7 +148,9 @@ class _ScannerDashboardPageState extends ConsumerState<ScannerDashboardPage> {
     setState(() => _isTripActive = false);
     await prefs.setBool('is_trip_active', false);
 
-    final pos = await LocationService().getCurrentLocation();
+    final locationService = LocationService();
+    final pos = await locationService.getCurrentLocation();
+    locationService.stopTracking(); // Stop background tracking
 
     try {
       // 1. Log trip end to Supabase
@@ -161,6 +175,7 @@ class _ScannerDashboardPageState extends ConsumerState<ScannerDashboardPage> {
             latitude: pos?.latitude,
             longitude: pos?.longitude,
             forcedStatus: 'offboarded',
+            ignoreDebounce: true,
           );
         }
         // Refresh UI
@@ -208,9 +223,9 @@ class _ScannerDashboardPageState extends ConsumerState<ScannerDashboardPage> {
     try {
       final repo = ref.read(scannerRepositoryProvider);
       
-      // Fetch Location
+      // Fetch Location instantly from cache stream
       final locationService = LocationService();
-      final position = await locationService.getCurrentLocation();
+      final position = await locationService.getCurrentLocation(instant: true);
       
       final result = await repo.processScan(
         code: code,

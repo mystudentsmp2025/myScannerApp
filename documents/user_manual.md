@@ -23,13 +23,14 @@ Before you can begin scanning students on or off the bus, you must start an acti
 
 ### Starting a Trip
 1. From the main **Dashboard**, locate the **"Start Trip"** button at the top of the screen.
-2. Tap the button. The status icon will turn green, indicating that the trip is actively recording data.
+2. Tap the button. The status icon will turn green, indicating that the trip is actively recording data. 
+   *(Note: Starting a trip activates a continuous, high-accuracy GPS stream in the background to ensure scans are processed instantly without waiting for a satellite lock).*
 
 *Important: If you forget to tap "Start Trip" and successfully scan a student, the app will instantly prompt you with a dialog asking if you'd like to automatically start the trip right then and there.*
 
 ### Ending a Trip
 1. When your route is complete, tap the **"End Trip"** button at the top of the screen.
-2. The status icon will turn gray.
+2. The status icon will turn gray. Any passengers still logged as being on the bus will be forcefully auto-deboarded.
 
 *Smart Prompts: If you scan the final student off the bus (leaving the bus empty), the app will intelligently ask if you're ready to conclude the trip.*
 
@@ -41,6 +42,8 @@ The app intelligently handles whether a student is "Boarding" or "Deboarding" ba
 
 ### Double Scan Prevention (Already Scanned Warning)
 To prevent accidental scans, the system includes a **60-second cooldown** per student. If a student mistakenly taps their card twice in rapid succession, the app will block the second scan and display a prominent yellow **"Already Scanned!"** warning. This ensures students aren't accidentally boarded and immediately deboarded within moments of each other.
+
+*Bypass Note: This 60-second cooldown rule is intentionally bypassed if you manually tap "Deboard" from the manual roster list, or if the "End Trip" auto-deboard triggers, ensuring that intentional or systemic actions are never blocked.*
 
 The app supports three different input methods for scanning:
 
